@@ -44,6 +44,47 @@ describe("Sentiment", () => {
         expect(sentiment.calculate(tokenize(text), LanguageCodes.indexOf("de"))).toBe(expected);
     });
 
+    test.each([
+        "ja",
+        "bitte",
+        "Sicher",
+        "ja sicher, wir gehn aber scho um 1230",
+        "Kinder bleiben heut daham",
+        "einfach nur halt",
+    ])("ignores German discourse particles: %s", (text) => {
+        expect(sentiment.calculate(tokenize(text), LanguageCodes.indexOf("de"))).toBeUndefined();
+    });
+
+    test.each([
+        ["scheiß wetter", -4],
+        ["Scheiss firmenstonks", -4],
+        ["was zum fick", -4],
+        ["leider ka zeit", -2],
+        ["des is teuer", -2],
+        ["ned teuer", 2],
+        ["danke", 2],
+        ["bitte danke", 2],
+    ])("scores German chat vocabulary: %s", (text, expected) => {
+        expect(sentiment.calculate(tokenize(text), LanguageCodes.indexOf("de"))).toBe(expected);
+    });
+
+    test.each([
+        ["des is oasch", -3],
+        ["so a deppat", -3],
+        ["die geilste party", 3],
+        ["scheißn tu i heit", -3],
+    ])("scores German dialect profanity and inflections: %s", (text, expected) => {
+        expect(sentiment.calculate(tokenize(text), LanguageCodes.indexOf("de"))).toBe(expected);
+    });
+
+    it("does not turn negated German insults into praise", () => {
+        const de = LanguageCodes.indexOf("de");
+        expect(sentiment.calculate(tokenize("ned so deppat"), de)).toBe(-3);
+        expect(sentiment.calculate(tokenize("kein fucking internet"), de)).toBe(-3);
+        // ordinary negative words are still reversed
+        expect(sentiment.calculate(tokenize("ned schlimmer"), de)).toBe(2);
+    });
+
     it("distinguishes no recognized sentiment from balanced sentiment", () => {
         expect(sentiment.calculate(tokenize("oida"), LanguageCodes.indexOf("de"))).toBeUndefined();
         expect(sentiment.calculate(tokenize("gut schön schlecht"), 0)).toBeUndefined();

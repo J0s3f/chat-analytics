@@ -17,6 +17,121 @@ const germanAliases: Record<string, string> = {
     schee: "schön",
     leiwand: "gut",
 };
+// The German word list assigns polarity to discourse particles and ordinary nouns ("ja", "bitte", "sicher",
+// "Kinder", "Art"), which made neutral or critical chat messages score as positive. These carry no sentiment
+// of their own in conversation, so they are ignored.
+const germanNeutralTerms = [
+    "ja",
+    "bitte",
+    "sicher",
+    "einfach",
+    "rein",
+    "halt",
+    "natürlich",
+    "art",
+    "kinder",
+    "ah",
+    "als",
+];
+// Corrections and additions for German chat vocabulary (including Austrian spellings), on the dictionary's scale.
+// Prices are a complaint, not praise, and common profanity/complaint words were missing entirely.
+const germanWeights: Record<string, number> = {
+    teuer: -2,
+    unguat: -2,
+    scheiß: -4,
+    scheiss: -4,
+    scheiße: -4,
+    scheisse: -4,
+    fick: -4,
+    drecks: -3,
+    dreck: -3,
+    arsch: -3,
+    depp: -3,
+    vuitrottl: -3,
+    cringe: -2,
+    leider: -2,
+    mühsam: -2,
+    danke: 2,
+    geil: 3,
+    super: 3,
+    nice: 2,
+    // Profanity, insults and complaints that were frequent in German chat but missing from the word list.
+    oasch: -3,
+    oaschloch: -4,
+    fucking: -3,
+    fuck: -3,
+    deppat: -3,
+    deppad: -3,
+    deppaden: -3,
+    trottl: -3,
+    trottln: -3,
+    vollidioten: -4,
+    idioten: -3,
+    sautrottel: -4,
+    krätzn: -3,
+    schas: -3,
+    schaß: -3,
+    scheißen: -3,
+    scheissen: -3,
+    scheißn: -3,
+    scheis: -3,
+    gschissenen: -3,
+    schwurbler: -3,
+    schiach: -2,
+    grantig: -2,
+    anstrengend: -2,
+    nervt: -2,
+    nervig: -2,
+    absurd: -2,
+    sinnlos: -2,
+    schlimmer: -2,
+    schlimmste: -3,
+    schlechte: -2,
+    frechheit: -3,
+    dumme: -3,
+    verreckt: -3,
+    fad: -2,
+    sadge: -2,
+    uff: -2,
+    smh: -2,
+    // Inflected or dialect forms of words the list already has in another form.
+    gute: 2,
+    geile: 3,
+    geiler: 3,
+    geilste: 3,
+    freu: 2,
+    praise: 2,
+};
+// Insults and profanity are intensifiers, not statements that can be negated into praise: "ned so deppat" or
+// "kein fucking Internet" are still complaints. Negation near these words does not flip them.
+const germanNegationImmune = new Set([
+    ...["scheiß", "scheiss", "scheiße", "scheisse", "scheißen", "scheissen", "scheißn", "scheis", "schas", "schaß"],
+    ...[
+        "gschissenen",
+        "fick",
+        "fuck",
+        "fucking",
+        "oasch",
+        "oaschloch",
+        "arsch",
+        "deppat",
+        "deppad",
+        "deppaden",
+        "depp",
+    ],
+    ...[
+        "trottl",
+        "trottln",
+        "vuitrottl",
+        "sautrottel",
+        "vollidioten",
+        "idioten",
+        "krätzn",
+        "schwurbler",
+        "dreck",
+        "drecks",
+    ],
+]);
 const clauseBoundaries: Partial<Record<Language, string[]>> = {
     de: ["aber", "sondern", "jedoch", "doch", "owa"],
     en: ["but", "however", "yet"],
@@ -28,8 +143,12 @@ export class Sentiment {
             negators: PatternMatcher;
             afinn: PatternMatcher;
             boundaries: Set<string>;
+            negationImmune: Set<string>;
         };
     } = {};
+
+    /** Whether insults/profanity ignore negation. Only switched off to measure its effect. */
+    public negationImmunity = true;
 
     private constructor(afinnZipBuffer: ArrayBuffer, private emojiData: Emojis, progress?: Progress) {
         const filesAsBuffers = unzipSync(new Uint8Array(afinnZipBuffer));
@@ -59,6 +178,19 @@ export class Sentiment {
                 const langNegators = [...(negators[lang] ?? []), ...(lang === "de" ? germanNegators : [])];
                 const langAfinn = JSON.parse(filesAsStrings[filename]) as { [word: string]: number };
 
+                if (lang === "de") {
+                    // Dictionary keys keep their original casing ("Art"), so compare case-insensitively.
+                    for (const word of Object.keys(langAfinn)) {
+                        if (germanNeutralTerms.includes(word.toLowerCase())) delete langAfinn[word];
+                    }
+                    for (const [word, value] of Object.entries(germanWeights)) {
+                        for (const existing of Object.keys(langAfinn)) {
+                            if (existing.toLowerCase() === word) delete langAfinn[existing];
+                        }
+                        langAfinn[word] = value;
+                    }
+                }
+
                 // Reuse existing dictionary weights for conservative spelling aliases.
                 if (lang === "de") {
                     for (const [alias, canonical] of Object.entries(germanAliases)) {
@@ -72,6 +204,7 @@ export class Sentiment {
                     negators: new PatternMatcher(langNegators),
                     afinn: new PatternMatcher(Object.keys(langAfinn), Object.values(langAfinn)),
                     boundaries: new Set(clauseBoundaries[lang] ?? []),
+                    negationImmune: lang === "de" ? germanNegationImmune : new Set(),
                 };
             }
             progress?.progress("number", processed++, total);
@@ -134,7 +267,8 @@ export class Sentiment {
                 const afinnMatch = langDb.afinn.match(tokens, i);
                 if (afinnMatch) {
                     tokenHits++;
-                    score += afinnMatch.value * (nearNegator ? -1 : 1);
+                    const negated = nearNegator && !(this.negationImmunity && langDb.negationImmune.has(word));
+                    score += afinnMatch.value * (negated ? -1 : 1);
                     // Consume the whole phrase; its suffix must not be counted a second time.
                     i += afinnMatch.pattern.length;
                     nearNegatorDist += afinnMatch.pattern.length;

@@ -38,6 +38,7 @@ const createPieChart = (c: Container) => {
         Legend.new(c.root, {
             layout: c.root.verticalLayout,
             clickTarget: "none",
+            paddingBottom: 24,
         })
     );
     legend.labels.template.set("text", "{category}");
